@@ -11,6 +11,7 @@ use aptos_types::{
 };
 use move_core_types::parser::parse_struct_tag;
 use serde::{Deserialize, Serialize};
+use aptos_types::chain_id::ChainId;
 
 #[derive(Serialize, Deserialize)]
 struct RotationCapabilityOfferProofChallengeV2 {
@@ -42,7 +43,7 @@ pub fn offer_rotation_capability_v2(
         account_address: CORE_CODE_ADDRESS,
         module_name: String::from("account"),
         struct_name: String::from("RotationCapabilityOfferProofChallengeV2"),
-        chain_id: 4,
+        chain_id: ChainId::test().id(),
         sequence_number: 0,
         source_address: *offerer_account.address(),
         recipient_address: *delegate_account.address(),
