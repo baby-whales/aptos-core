@@ -47,6 +47,5 @@ pub struct Multisig {
     pub multisig_address: AccountAddress,
 
     // Transaction payload is optional if already stored on chain.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_payload: Option<MultisigTransactionPayload>,
 }

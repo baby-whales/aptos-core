@@ -34,9 +34,9 @@ use aptos_types::{
     block_metadata::BlockMetadata,
     on_chain_config::{new_epoch_event_key, FeatureFlag},
     transaction::{
-        ChangeSet, ExecutionStatus, ModuleBundle, SignatureCheckedTransaction, SignedTransaction,
-        Transaction, TransactionOutput, TransactionPayload, TransactionStatus, VMValidatorResult,
-        WriteSetPayload,
+        ChangeSet, ExecutionStatus, ModuleBundle, Multisig, MultisigTransactionPayload,
+        SignatureCheckedTransaction, SignedTransaction, Transaction, TransactionOutput,
+        TransactionPayload, TransactionStatus, VMValidatorResult, WriteSetPayload,
     },
     vm_status::{AbortLocation, DiscardedVMStatus, StatusCode, VMStatus},
     write_set::WriteSet,
@@ -59,6 +59,7 @@ use move_core_types::{
 use move_vm_types::gas::UnmeteredGasMeter;
 use num_cpus;
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::min,
     collections::{BTreeMap, BTreeSet},
@@ -79,6 +80,19 @@ static PROCESSED_TRANSACTIONS_DETAILED_COUNTERS: OnceCell<bool> = OnceCell::new(
 static MODULE_BUNDLE_DISALLOWED: AtomicBool = AtomicBool::new(true);
 pub fn allow_module_bundle_for_test() {
     MODULE_BUNDLE_DISALLOWED.store(false, Ordering::Relaxed);
+}
+
+/// Contains information about execution failure.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ExecutionError {
+    abort_location: String,
+    // There are 3 error types, stored as strings:
+    // 1. VMError. Indicates an error from the VM, e.g. out of gas, invalid auth key, etc.
+    // 2. MoveAbort. Indicates an abort, e.g. assertion failure, from inside the executed Move code.
+    // 3. MoveExecutionFailure. Indicates an error from Move code where the VM could not continue. For example,
+    // arithmetic failures.
+    error_type: String,
+    error_code: u64,
 }
 
 #[derive(Clone)]
@@ -413,6 +427,177 @@ impl AptosVM {
         }
     }
 
+    // Execute a multisig transaction:
+    // 1. Obtain the payload of the transaction to execute. This could have been stored on chain
+    // when the multisig transaction was created.
+    // 2. Execute the target payload. If this fails, discard the session and keep the gas meter and
+    // failure object. In case of success, keep the session and also do any necessary module publish
+    // cleanup.
+    // 3. Call post transaction cleanup function in multisig account module with the result from (2)
+    fn execute_multisig_transaction<S: MoveResolverExt + StateView>(
+        &self,
+        storage: &S,
+        mut session: SessionExt<S>,
+        gas_meter: &mut AptosGasMeter,
+        txn_data: &TransactionMetadata,
+        txn_payload: &Multisig,
+        log_context: &AdapterLogSchema,
+    ) -> Result<(VMStatus, TransactionOutputExt), VMStatus> {
+        fail_point!("move_adapter::execute_multisig_transaction", |_| {
+            Err(VMStatus::Error(
+                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+            ))
+        });
+
+        gas_meter
+            .charge_intrinsic_gas_for_transaction(txn_data.transaction_size())
+            .map_err(|e| e.into_vm_status())?;
+
+        // Step 1: Obtain the payload. If any errors happen here, the entire transaction should fail
+        let provided_payload = if txn_payload.transaction_payload.is_some() {
+            bcs::to_bytes(txn_payload.transaction_payload.as_ref().unwrap()).unwrap()
+        } else {
+            // Default to empty bytes if payload is not provided.
+            bcs::to_bytes::<Vec<u8>>(&vec![]).unwrap()
+        };
+        // Failures here will be propagated back.
+        let payload_bytes: Vec<Vec<u8>> = session
+            .execute_function_bypass_visibility(
+                &MULTISIG_ACCOUNT_MODULE,
+                GET_NEXT_TRANSACTION_PAYLOAD,
+                vec![],
+                serialize_values(&vec![
+                    MoveValue::Address(txn_payload.multisig_address),
+                    MoveValue::vector_u8(provided_payload.clone()),
+                ]),
+                gas_meter,
+            )?
+            .return_values
+            .into_iter()
+            .map(|(bytes, _ty)| bytes)
+            .collect::<Vec<_>>();
+        // We have to deserialize once to get the actual return type of the function, which is
+        // vec<u8>.
+        let payload: Vec<u8> = bcs::from_bytes(payload_bytes.first().unwrap()).map_err(|_| {
+            PartialVMError::new(StatusCode::UNREACHABLE).finish(Location::Undefined)
+        })?;
+        // Deserialize a second time to convert bytes into the actual multisig payload type.
+        let payload: MultisigTransactionPayload = bcs::from_bytes(&payload).map_err(|_| {
+            PartialVMError::new(StatusCode::UNREACHABLE).finish(Location::Undefined)
+        })?;
+
+        // Step 2: Execute the target payload. Transaction failure here is tolerated. In case of any
+        // failures, we'll discard the session and start a new one. This ensures that any data
+        // changes are not persisted.
+        // The multisig transaction would still be considered executed even if execution fails.
+        let execution_result = self.execute_multisig_entry_function(
+            &mut session,
+            gas_meter,
+            txn_payload.multisig_address,
+            &payload,
+        );
+
+        // Step 3: Call post transaction cleanup function in multisig account module with the result
+        // from Step 2.
+        let mut cleanup_args = serialize_values(&vec![
+            MoveValue::Address(txn_data.sender),
+            MoveValue::Address(txn_payload.multisig_address),
+            MoveValue::vector_u8(provided_payload),
+        ]);
+        let session_output = if let Err(execution_error) = execution_result {
+            let execution_error = Self::convert_to_execution_error(execution_error)?;
+            cleanup_args.push(bcs::to_bytes(&execution_error).unwrap());
+
+            // Reset the session to skip any state changes from the failed execution.
+            // The gas meter is not reset, so sender would still be charged for the failed execution
+            let mut new_session = self.0.new_session(storage, SessionId::txn_meta(txn_data));
+            new_session.execute_function_bypass_visibility(
+                &MULTISIG_ACCOUNT_MODULE,
+                FAILED_TRANSACTION_EXECUTION_CLEANUP,
+                vec![],
+                cleanup_args,
+                gas_meter,
+            )?;
+            new_session.finish().map_err(|e| e.into_vm_status())?
+        } else {
+            session.execute_function_bypass_visibility(
+                &MULTISIG_ACCOUNT_MODULE,
+                SUCCESSFUL_TRANSACTION_EXECUTION_CLEANUP,
+                vec![],
+                cleanup_args,
+                gas_meter,
+            )?;
+            session.finish().map_err(|e| e.into_vm_status())?
+        };
+
+        let change_set_ext =
+            session_output.into_change_set(&mut (), gas_meter.change_set_configs())?;
+        gas_meter.charge_write_set_gas(change_set_ext.write_set().iter())?;
+        // TODO(Gas): Charge for aggregator writes
+        self.success_transaction_cleanup(storage, change_set_ext, gas_meter, txn_data, log_context)
+    }
+
+    fn execute_multisig_entry_function<S: MoveResolverExt + StateView>(
+        &self,
+        session: &mut SessionExt<S>,
+        gas_meter: &mut AptosGasMeter,
+        multisig_address: AccountAddress,
+        payload: &MultisigTransactionPayload,
+    ) -> Result<(), VMStatus> {
+        let function =
+            session.load_function(payload.module(), payload.function(), payload.ty_args())?;
+        // This transaction is now being executed as the multisig account.
+        // If txn args are not valid, we'd still consider the multisig transaction as executed but
+        // failed. This is primarily because it's unrecoverable at this point.
+        let args = verifier::transaction_arg_validation::validate_combine_signer_and_txn_args(
+            session,
+            vec![multisig_address],
+            payload.args().to_vec(),
+            &function,
+        )?;
+        session
+            .execute_entry_function(
+                payload.module(),
+                payload.function(),
+                payload.ty_args().to_vec(),
+                args,
+                gas_meter,
+            )
+            // TODO: Handle partial failure from executing the target payload.
+            .map_err(|e| e.into_vm_status())?;
+
+        // Resolve any pending module publishes in case the multisig transaction is deploying
+        // modules.
+        self.resolve_pending_code_publish(session, gas_meter)?;
+        Ok(())
+    }
+
+    fn convert_to_execution_error(status: VMStatus) -> Result<ExecutionError, VMStatus> {
+        match status {
+            VMStatus::Error(error) => Ok(ExecutionError {
+                error_type: String::from("VMError"),
+                abort_location: String::from(""),
+                error_code: error as u64,
+            }),
+            VMStatus::MoveAbort(abort_location, error_code) => Ok(ExecutionError {
+                error_type: String::from("MoveAbort"),
+                abort_location: format!("{:?}", abort_location),
+                error_code,
+            }),
+            VMStatus::ExecutionFailure {
+                status_code,
+                location,
+                function: _,
+                code_offset: _,
+            } => Ok(ExecutionError {
+                error_type: String::from("MoveExecutionFailure"),
+                abort_location: format!("{:?}", location),
+                error_code: status_code as u64,
+            }),
+            _ => Err(VMStatus::Error(StatusCode::UNREACHABLE)),
+        }
+    }
+
     fn verify_module_bundle<S: MoveResolverExt>(
         session: &mut SessionExt<S>,
         module_bundle: &ModuleBundle,
@@ -740,10 +925,14 @@ impl AptosVM {
                     payload,
                     log_context,
                 ),
-            TransactionPayload::Multisig(_) => {
-                // TODO
-                Err(VMStatus::Executed)
-            },
+            TransactionPayload::Multisig(payload) => self.execute_multisig_transaction(
+                storage,
+                session,
+                &mut gas_meter,
+                &txn_data,
+                payload,
+                log_context,
+            ),
 
             // Deprecated. Will be removed in the future.
             TransactionPayload::ModuleBundle(m) => {
@@ -1026,10 +1215,10 @@ impl AptosVM {
                 self.0.check_gas(storage, txn_data, log_context)?;
                 self.0.run_script_prologue(session, txn_data, log_context)
             },
-            TransactionPayload::Multisig(_) => {
+            TransactionPayload::Multisig(multisig_payload) => {
                 self.0.check_gas(storage, txn_data, log_context)?;
-                // TODO: Update to run a different prologue.
-                self.0.run_script_prologue(session, txn_data, log_context)
+                self.0
+                    .run_multisig_prologue(session, txn_data, multisig_payload, log_context)
             },
 
             // Deprecated. Will be removed in the future.
@@ -1306,10 +1495,14 @@ impl AptosSimulationVM {
                     log_context,
                 )
             },
-            TransactionPayload::Multisig(_) => {
-                // TODO
-                Err(VMStatus::Executed)
-            },
+            TransactionPayload::Multisig(payload) => self.0.execute_multisig_transaction(
+                storage,
+                session,
+                &mut gas_meter,
+                &txn_data,
+                payload,
+                log_context,
+            ),
 
             // Deprecated. Will be removed in the future.
             TransactionPayload::ModuleBundle(m) => {

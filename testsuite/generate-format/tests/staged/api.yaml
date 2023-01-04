@@ -164,7 +164,6 @@ Multisig:
   STRUCT:
     - multisig_address:
         TYPENAME: AccountAddress
-    - transaction_id: U64
     - transaction_payload:
         OPTION:
           TYPENAME: MultisigTransactionPayload
@@ -377,17 +376,17 @@ TransactionPayload:
         NEWTYPE:
           TYPENAME: Script
     1:
-      EntryFunction:
-        NEWTYPE:
-          TYPENAME: EntryFunction
-    2:
-      Multisig:
-        NEWTYPE:
-          TYPENAME: Multisig
-    3:
       ModuleBundle:
         NEWTYPE:
           TYPENAME: ModuleBundle
+    2:
+      EntryFunction:
+        NEWTYPE:
+          TYPENAME: EntryFunction
+    3:
+      Multisig:
+        NEWTYPE:
+          TYPENAME: Multisig
 TypeTag:
   ENUM:
     0:
