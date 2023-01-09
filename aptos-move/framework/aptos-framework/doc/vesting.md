@@ -29,6 +29,9 @@
 -  [Function `vesting_contracts`](#0x1_vesting_vesting_contracts)
 -  [Function `operator`](#0x1_vesting_operator)
 -  [Function `voter`](#0x1_vesting_voter)
+-  [Function `vesting_schedule`](#0x1_vesting_vesting_schedule)
+-  [Function `total_accumulated_rewards`](#0x1_vesting_total_accumulated_rewards)
+-  [Function `accumulated_rewards`](#0x1_vesting_accumulated_rewards)
 -  [Function `create_vesting_schedule`](#0x1_vesting_create_vesting_schedule)
 -  [Function `create_vesting_contract`](#0x1_vesting_create_vesting_contract)
 -  [Function `unlock_rewards`](#0x1_vesting_unlock_rewards)
@@ -1246,6 +1249,90 @@ Vesting contract has been terminated and all funds have been released back to th
 
 </details>
 
+<a name="0x1_vesting_vesting_schedule"></a>
+
+## Function `vesting_schedule`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_vesting_schedule">vesting_schedule</a>(vesting_contract_address: <b>address</b>): <a href="vesting.md#0x1_vesting_VestingSchedule">vesting::VestingSchedule</a>
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_vesting_schedule">vesting_schedule</a>(vesting_contract_address: <b>address</b>): <a href="vesting.md#0x1_vesting_VestingSchedule">VestingSchedule</a> <b>acquires</b> <a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a> {
+    <a href="vesting.md#0x1_vesting_assert_vesting_contract_exists">assert_vesting_contract_exists</a>(vesting_contract_address);
+    <b>borrow_global</b>&lt;<a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a>&gt;(vesting_contract_address).vesting_schedule
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_vesting_total_accumulated_rewards"></a>
+
+## Function `total_accumulated_rewards`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_total_accumulated_rewards">total_accumulated_rewards</a>(vesting_contract_address: <b>address</b>): u64
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_total_accumulated_rewards">total_accumulated_rewards</a>(vesting_contract_address: <b>address</b>): u64 <b>acquires</b> <a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a> {
+    <a href="vesting.md#0x1_vesting_assert_active_vesting_contract">assert_active_vesting_contract</a>(vesting_contract_address);
+
+    <b>let</b> vesting_contract = <b>borrow_global</b>&lt;<a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a>&gt;(vesting_contract_address);
+    <b>let</b> (total_active_stake, _, commission_amount) =
+        <a href="staking_contract.md#0x1_staking_contract_staking_contract_amounts">staking_contract::staking_contract_amounts</a>(vesting_contract_address, vesting_contract.staking.operator);
+    total_active_stake - vesting_contract.remaining_grant - commission_amount
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_vesting_accumulated_rewards"></a>
+
+## Function `accumulated_rewards`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_accumulated_rewards">accumulated_rewards</a>(vesting_contract_address: <b>address</b>, shareholder: <b>address</b>): u64
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="vesting.md#0x1_vesting_accumulated_rewards">accumulated_rewards</a>(
+    vesting_contract_address: <b>address</b>, shareholder: <b>address</b>): u64 <b>acquires</b> <a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a> {
+    <a href="vesting.md#0x1_vesting_assert_active_vesting_contract">assert_active_vesting_contract</a>(vesting_contract_address);
+
+    <b>let</b> total_accumulated_rewards = <a href="vesting.md#0x1_vesting_total_accumulated_rewards">total_accumulated_rewards</a>(vesting_contract_address);
+    <b>let</b> vesting_contract = <b>borrow_global</b>&lt;<a href="vesting.md#0x1_vesting_VestingContract">VestingContract</a>&gt;(vesting_contract_address);
+    <b>let</b> shares = <a href="../../aptos-stdlib/doc/pool_u64.md#0x1_pool_u64_shares">pool_u64::shares</a>(&vesting_contract.grant_pool, shareholder);
+    <a href="../../aptos-stdlib/doc/pool_u64.md#0x1_pool_u64_shares_to_amount_with_total_coins">pool_u64::shares_to_amount_with_total_coins</a>(&vesting_contract.grant_pool, shares, total_accumulated_rewards)
+}
+</code></pre>
+
+
+
+</details>
+
 <a name="0x1_vesting_create_vesting_schedule"></a>
 
 ## Function `create_vesting_schedule`
@@ -1551,14 +1638,14 @@ Distribute any withdrawable stake from the stake pool.
         <b>let</b> amount = <a href="../../aptos-stdlib/doc/pool_u64.md#0x1_pool_u64_shares_to_amount_with_total_coins">pool_u64::shares_to_amount_with_total_coins</a>(grant_pool, shares, total_distribution_amount);
         <b>let</b> share_of_coins = <a href="coin.md#0x1_coin_extract">coin::extract</a>(&<b>mut</b> coins, amount);
         <b>let</b> recipient_address = <a href="vesting.md#0x1_vesting_get_beneficiary">get_beneficiary</a>(vesting_contract, shareholder);
-        <a href="coin.md#0x1_coin_deposit">coin::deposit</a>(recipient_address, share_of_coins);
+        <a href="aptos_account.md#0x1_aptos_account_deposit_coins">aptos_account::deposit_coins</a>(recipient_address, share_of_coins);
 
         i = i + 1;
     };
 
     // Send <a href="../../aptos-stdlib/doc/any.md#0x1_any">any</a> remaining "dust" (leftover due <b>to</b> rounding <a href="../../aptos-stdlib/../move-stdlib/doc/error.md#0x1_error">error</a>) <b>to</b> the withdrawal <b>address</b>.
     <b>if</b> (<a href="coin.md#0x1_coin_value">coin::value</a>(&coins) &gt; 0) {
-        <a href="coin.md#0x1_coin_deposit">coin::deposit</a>(vesting_contract.withdrawal_address, coins);
+        <a href="aptos_account.md#0x1_aptos_account_deposit_coins">aptos_account::deposit_coins</a>(vesting_contract.withdrawal_address, coins);
     } <b>else</b> {
         <a href="coin.md#0x1_coin_destroy_zero">coin::destroy_zero</a>(coins);
     };
@@ -1653,7 +1740,7 @@ has already been terminated.
         <a href="coin.md#0x1_coin_destroy_zero">coin::destroy_zero</a>(coins);
         <b>return</b>
     };
-    <a href="coin.md#0x1_coin_deposit">coin::deposit</a>(vesting_contract.withdrawal_address, coins);
+    <a href="aptos_account.md#0x1_aptos_account_deposit_coins">aptos_account::deposit_coins</a>(vesting_contract.withdrawal_address, coins);
 
     emit_event(
         &<b>mut</b> vesting_contract.admin_withdraw_events,

@@ -150,24 +150,28 @@ module aptos_framework::staking_contract {
         amount: u64,
     }
 
+    #[view]
     public fun stake_pool_address(staker: address, operator: address): address acquires Store {
         assert_staking_contract_exists(staker, operator);
         let staking_contracts = &borrow_global<Store>(staker).staking_contracts;
         simple_map::borrow(staking_contracts, &operator).pool_address
     }
 
+    #[view]
     public fun last_recorded_principal(staker: address, operator: address): u64 acquires Store {
         assert_staking_contract_exists(staker, operator);
         let staking_contracts = &borrow_global<Store>(staker).staking_contracts;
         simple_map::borrow(staking_contracts, &operator).principal
     }
 
+    #[view]
     public fun commission_percentage(staker: address, operator: address): u64 acquires Store {
         assert_staking_contract_exists(staker, operator);
         let staking_contracts = &borrow_global<Store>(staker).staking_contracts;
         simple_map::borrow(staking_contracts, &operator).commission_percentage
     }
 
+    #[view]
     public fun staking_contract_amounts(staker: address, operator: address): (u64, u64, u64) acquires Store {
         assert_staking_contract_exists(staker, operator);
         let staking_contracts = &borrow_global<Store>(staker).staking_contracts;
@@ -175,12 +179,14 @@ module aptos_framework::staking_contract {
         get_staking_contract_amounts_internal(staking_contract)
     }
 
+    #[view]
     public fun pending_distribution_counts(staker: address, operator: address): u64 acquires Store {
         assert_staking_contract_exists(staker, operator);
         let staking_contracts = &borrow_global<Store>(staker).staking_contracts;
         pool_u64::shareholders_count(&simple_map::borrow(staking_contracts, &operator).distribution_pool)
     }
 
+    #[view]
     public fun staking_contract_exists(staker: address, operator: address): bool acquires Store {
         if (!exists<Store>(staker)) {
             return false

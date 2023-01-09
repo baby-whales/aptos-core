@@ -46,7 +46,7 @@ module aptos_framework::vesting {
     use aptos_std::simple_map::{Self, SimpleMap};
 
     use aptos_framework::account::{Self, SignerCapability, new_event_handle};
-    use aptos_framework::aptos_account::assert_account_is_registered_for_apt;
+    use aptos_framework::aptos_account::{Self, assert_account_is_registered_for_apt};
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::event::{EventHandle, emit_event};
@@ -112,7 +112,7 @@ module aptos_framework::vesting {
         schedule: vector<FixedPoint32>,
         // When the vesting should start.
         start_timestamp_secs: u64,
-        // How long each vesting period is. For example 1 month.
+        // In seconds. How long each vesting period is. For example 1 month.
         period_duration: u64,
         // Last vesting period, 1-indexed. For example if 2 months have passed, the last vesting period, if distribution
         // was requested, would be 2. Default value is 0 which means there have been no vesting periods yet.
@@ -243,31 +243,37 @@ module aptos_framework::vesting {
         amount: u64,
     }
 
+    #[view]
     public fun stake_pool_address(vesting_contract_address: address): address acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).staking.pool_address
     }
 
+    #[view]
     public fun vesting_start_secs(vesting_contract_address: address): u64 acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).vesting_schedule.start_timestamp_secs
     }
 
+    #[view]
     public fun remaining_grant(vesting_contract_address: address): u64 acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).remaining_grant
     }
 
+    #[view]
     public fun beneficiary(vesting_contract_address: address, shareholder: address): address acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         get_beneficiary(borrow_global<VestingContract>(vesting_contract_address), shareholder)
     }
 
+    #[view]
     public fun operator_commission_percentage(vesting_contract_address: address): u64 acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).staking.commission_percentage
     }
 
+    #[view]
     public fun vesting_contracts(admin: address): vector<address> acquires AdminStore {
         if (!exists<AdminStore>(admin)) {
             vector::empty<address>()
@@ -276,14 +282,43 @@ module aptos_framework::vesting {
         }
     }
 
+    #[view]
     public fun operator(vesting_contract_address: address): address acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).staking.operator
     }
 
+    #[view]
     public fun voter(vesting_contract_address: address): address acquires VestingContract {
         assert_vesting_contract_exists(vesting_contract_address);
         borrow_global<VestingContract>(vesting_contract_address).staking.voter
+    }
+
+    #[view]
+    public fun vesting_schedule(vesting_contract_address: address): VestingSchedule acquires VestingContract {
+        assert_vesting_contract_exists(vesting_contract_address);
+        borrow_global<VestingContract>(vesting_contract_address).vesting_schedule
+    }
+
+    #[view]
+    public fun total_accumulated_rewards(vesting_contract_address: address): u64 acquires VestingContract {
+        assert_active_vesting_contract(vesting_contract_address);
+
+        let vesting_contract = borrow_global<VestingContract>(vesting_contract_address);
+        let (total_active_stake, _, commission_amount) =
+            staking_contract::staking_contract_amounts(vesting_contract_address, vesting_contract.staking.operator);
+        total_active_stake - vesting_contract.remaining_grant - commission_amount
+    }
+
+    #[view]
+    public fun accumulated_rewards(
+        vesting_contract_address: address, shareholder: address): u64 acquires VestingContract {
+        assert_active_vesting_contract(vesting_contract_address);
+
+        let total_accumulated_rewards = total_accumulated_rewards(vesting_contract_address);
+        let vesting_contract = borrow_global<VestingContract>(vesting_contract_address);
+        let shares = pool_u64::shares(&vesting_contract.grant_pool, shareholder);
+        pool_u64::shares_to_amount_with_total_coins(&vesting_contract.grant_pool, shares, total_accumulated_rewards)
     }
 
     /// Create a vesting schedule with the given schedule of distributions, a vesting start time and period duration.
@@ -496,14 +531,14 @@ module aptos_framework::vesting {
             let amount = pool_u64::shares_to_amount_with_total_coins(grant_pool, shares, total_distribution_amount);
             let share_of_coins = coin::extract(&mut coins, amount);
             let recipient_address = get_beneficiary(vesting_contract, shareholder);
-            coin::deposit(recipient_address, share_of_coins);
+            aptos_account::deposit_coins(recipient_address, share_of_coins);
 
             i = i + 1;
         };
 
         // Send any remaining "dust" (leftover due to rounding error) to the withdrawal address.
         if (coin::value(&coins) > 0) {
-            coin::deposit(vesting_contract.withdrawal_address, coins);
+            aptos_account::deposit_coins(vesting_contract.withdrawal_address, coins);
         } else {
             coin::destroy_zero(coins);
         };
@@ -558,7 +593,7 @@ module aptos_framework::vesting {
             coin::destroy_zero(coins);
             return
         };
-        coin::deposit(vesting_contract.withdrawal_address, coins);
+        aptos_account::deposit_coins(vesting_contract.withdrawal_address, coins);
 
         emit_event(
             &mut vesting_contract.admin_withdraw_events,
