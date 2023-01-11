@@ -32,3 +32,17 @@ pub fn bootstrap_indexer(
 ) -> Result<Option<Runtime>, anyhow::Error> {
     Ok(None)
 }
+
+pub fn bootstrap_indexer_grpc(
+    node_config: &NodeConfig,
+    chain_id: ChainId,
+    aptos_db: Arc<dyn DbReader>,
+    mp_client_sender: MempoolClientSender,
+) -> Result<Option<Runtime>, anyhow::Error> {
+    use aptos_indexer_grpc::runtime::bootstrap as bootstrap_indexer_grpc_stream;
+
+    match bootstrap_indexer_grpc_stream(node_config, chain_id, aptos_db, mp_client_sender) {
+        None => Ok(None),
+        Some(res) => res.map(Some),
+    }
+}
