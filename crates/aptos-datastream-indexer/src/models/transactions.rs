@@ -48,8 +48,10 @@ impl Transaction {
                     // No payload for BlockMetadata Txn.
                 },
                 TxnData::User(user) => match &user.request {
-                    Some(p) => if let Some(ref transaction_payload) = p.payload {
-                        payload = Some(serde_json::to_value(transaction_payload).unwrap());
+                    Some(p) => {
+                        if let Some(ref transaction_payload) = p.payload {
+                            payload = Some(serde_json::to_value(transaction_payload).unwrap());
+                        }
                     },
                     None => {},
                 },

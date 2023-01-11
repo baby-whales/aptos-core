@@ -50,15 +50,31 @@ pub fn bootstrap_api_and_indexer(
     };
 
     // Create the indexer runtime
-    let (indexer_runtime , indexer_grpc_runtime) = if node_config.indexer.enabled {
-        (indexer::bootstrap_indexer(node_config, chain_id, aptos_db, mempool_client_sender)?, None)
+    let (indexer_runtime, indexer_grpc_runtime) = if node_config.indexer.enabled {
+        (
+            indexer::bootstrap_indexer(node_config, chain_id, aptos_db, mempool_client_sender)?,
+            None,
+        )
     } else if node_config.indexer_grpc.enabled {
-        (None, indexer::bootstrap_indexer_grpc(node_config, chain_id, aptos_db, mempool_client_sender)?)
+        (
+            None,
+            indexer::bootstrap_indexer_grpc(
+                node_config,
+                chain_id,
+                aptos_db,
+                mempool_client_sender,
+            )?,
+        )
     } else {
         (None, None)
     };
 
-    Ok((mempool_client_receiver, api_runtime, indexer_runtime, indexer_grpc_runtime))
+    Ok((
+        mempool_client_receiver,
+        api_runtime,
+        indexer_runtime,
+        indexer_grpc_runtime,
+    ))
 }
 
 /// Starts consensus and returns the runtime
