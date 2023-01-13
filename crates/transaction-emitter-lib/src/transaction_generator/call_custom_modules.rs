@@ -8,8 +8,7 @@ use super::{
 use crate::transaction_generator::{
     publishing::publish_util::PackageHandler, TransactionGenerator, TransactionGeneratorCreator,
 };
-use aptos_infallible::RwLock;
-use aptos_logger::{info, sample, sample::SampleRate, warn};
+use aptos_logger::info;
 use aptos_sdk::{
     transaction_builder::TransactionFactory,
     types::{transaction::SignedTransaction, LocalAccount},
@@ -17,13 +16,12 @@ use aptos_sdk::{
 use async_trait::async_trait;
 use rand::{prelude::StdRng, seq::SliceRandom, Rng};
 use rand_core::{OsRng, SeedableRng};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub struct CallCustomModulesGenerator {
     rng: StdRng,
     txn_factory: TransactionFactory,
     packages: Arc<Vec<Package>>,
-    accounts_pool: Option<Arc<RwLock<Vec<LocalAccount>>>>,
     entry_point: EntryPoints,
 }
 
@@ -32,14 +30,12 @@ impl CallCustomModulesGenerator {
         rng: StdRng,
         txn_factory: TransactionFactory,
         packages: Arc<Vec<Package>>,
-        accounts_pool: Option<Arc<RwLock<Vec<LocalAccount>>>>,
         entry_point: EntryPoints,
     ) -> Self {
         Self {
             rng,
             txn_factory,
             packages,
-            accounts_pool,
             entry_point,
         }
     }
@@ -55,33 +51,15 @@ impl TransactionGenerator for CallCustomModulesGenerator {
         let needed = accounts.len() * transactions_per_account;
         let mut requests = Vec::with_capacity(needed);
 
-        let mut accounts_to_burn = if let Some(accounts_pool_lock) = &self.accounts_pool {
-            let mut accounts_pool = accounts_pool_lock.write();
-            let num_in_pool = accounts_pool.len();
-            if num_in_pool < needed {
-                sample!(
-                    SampleRate::Duration(Duration::from_secs(10)),
-                    warn!("Cannot fetch enough accounts from pool, left in pool {}, needed {}", num_in_pool, needed);
-                );
-                return Vec::new();
-            }
-            accounts_pool
-                .drain((num_in_pool - needed)..)
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
         for account in accounts {
             for _ in 0..transactions_per_account {
-                let mut next_to_burn = accounts_to_burn.pop();
                 let request = self
                     .packages
                     .choose(&mut self.rng)
                     .unwrap()
                     .use_specific_transaction(
                         self.entry_point,
-                        next_to_burn.as_mut().unwrap_or(account),
+                        account,
                         &self.txn_factory,
                         Some(&mut self.rng),
                         None,
@@ -96,17 +74,14 @@ impl TransactionGenerator for CallCustomModulesGenerator {
 pub struct CallCustomModulesCreator {
     txn_factory: TransactionFactory,
     packages: Arc<Vec<Package>>,
-    accounts_pool: Option<Arc<RwLock<Vec<LocalAccount>>>>,
     entry_point: EntryPoints,
 }
 
 impl CallCustomModulesCreator {
-    #[allow(dead_code)]
     pub async fn new(
         txn_factory: TransactionFactory,
         accounts: &mut [LocalAccount],
         txn_executor: &dyn TransactionExecutor,
-        accounts_pool: Option<Arc<RwLock<Vec<LocalAccount>>>>,
         entry_point: EntryPoints,
         num_modules: usize,
     ) -> Self {
@@ -128,7 +103,6 @@ impl CallCustomModulesCreator {
         Self {
             txn_factory,
             packages: Arc::new(packages),
-            accounts_pool,
             entry_point,
         }
     }
@@ -141,7 +115,6 @@ impl TransactionGeneratorCreator for CallCustomModulesCreator {
             StdRng::from_seed(OsRng.gen()),
             self.txn_factory.clone(),
             self.packages.clone(),
-            self.accounts_pool.clone(),
             self.entry_point,
         ))
     }

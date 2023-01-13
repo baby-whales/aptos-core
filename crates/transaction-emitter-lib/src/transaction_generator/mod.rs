@@ -6,6 +6,7 @@ use aptos_sdk::types::{transaction::SignedTransaction, LocalAccount};
 use async_trait::async_trait;
 
 pub mod account_generator;
+pub mod accounts_pool_wrapper;
 pub mod call_custom_modules;
 pub mod nft_mint_and_transfer;
 pub mod p2p_transaction_generator;

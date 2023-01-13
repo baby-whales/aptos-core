@@ -47,6 +47,7 @@ pub async fn emit_transactions_with_cluster(
         .map(|t| match t {
             TransactionTypeArg::CoinTransfer => TransactionType::CoinTransfer {
                 invalid_transaction_ratio: args.invalid_tx,
+                sender_use_account_pool: false,
             },
             TransactionTypeArg::AccountGeneration => TransactionType::default_account_generation(),
             TransactionTypeArg::AccountGenerationLargePool => TransactionType::AccountGeneration {
@@ -55,7 +56,9 @@ pub async fn emit_transactions_with_cluster(
                 creation_balance: 200_000_000,
             },
             TransactionTypeArg::NftMintAndTransfer => TransactionType::NftMintAndTransfer,
-            TransactionTypeArg::PublishPackage => TransactionType::PublishPackage,
+            TransactionTypeArg::PublishPackage => TransactionType::PublishPackage {
+                use_account_pool: false,
+            },
             TransactionTypeArg::CustomFunctionLargeModuleWorkingSet => {
                 TransactionType::CallCustomModules {
                     entry_point: EntryPoints::Nop,
